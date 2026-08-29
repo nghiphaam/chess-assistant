@@ -2680,6 +2680,106 @@ static id findOnlineGame(UIView *board) {
     return nil;
 }
 
+
+static void dumpPuzzleRuntime(id obj, NSString *tag) {
+    if (!obj) return;
+
+    Class cls = object_getClass(obj);
+    NSString *cn = NSStringFromClass(cls);
+    if (![cn containsString:@"Puzzle"] &&
+        ![cn containsString:@"CHBoardView"]) return;
+
+    dbg([NSString stringWithFormat:@"PUZZLE OBJ %@ = %@", tag, cn]);
+
+    unsigned int methodCount = 0;
+    Method *methods = class_copyMethodList(cls, &methodCount);
+    NSMutableArray *methodNames = [NSMutableArray array];
+    for (unsigned int i = 0; i < methodCount; i++) {
+        SEL sel = method_getName(methods[i]);
+        NSString *name = NSStringFromSelector(sel);
+        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
+            [name containsString:@"FEN"] || [name containsString:@"puzzle"] ||
+            [name containsString:@"Puzzle"] || [name containsString:@"position"] ||
+            [name containsString:@"Position"] || [name containsString:@"board"] ||
+            [name containsString:@"Board"] || [name containsString:@"game"] ||
+            [name containsString:@"Game"] || [name containsString:@"current"] ||
+            [name containsString:@"Current"]) {
+            [methodNames addObject:name];
+        }
+    }
+    free(methods);
+
+    [methodNames sortUsingSelector:@selector(compare:)];
+    if (methodNames.count) {
+        dbg([NSString stringWithFormat:@"PUZZLE SEL %@: %@", cn,
+             [methodNames componentsJoinedByString:@", "]]);
+    }
+
+    unsigned int ivarCount = 0;
+    Ivar *ivars = class_copyIvarList(cls, &ivarCount);
+    NSMutableArray *ivarNames = [NSMutableArray array];
+    for (unsigned int i = 0; i < ivarCount; i++) {
+        const char *n = ivar_getName(ivars[i]);
+        if (!n) continue;
+        NSString *name = [NSString stringWithUTF8String:n];
+        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
+            [name containsString:@"puzzle"] || [name containsString:@"Puzzle"] ||
+            [name containsString:@"position"] || [name containsString:@"Position"] ||
+            [name containsString:@"board"] || [name containsString:@"Board"] ||
+            [name containsString:@"game"] || [name containsString:@"Game"] ||
+            [name containsString:@"current"] || [name containsString:@"Current"]) {
+            [ivarNames addObject:name];
+        }
+    }
+    free(ivars);
+
+    if (ivarNames.count) {
+        [ivarNames sortUsingSelector:@selector(compare:)];
+        dbg([NSString stringWithFormat:@"PUZZLE IVAR %@: %@", cn,
+             [ivarNames componentsJoinedByString:@", "]]);
+    }
+}
+
+static void dumpPuzzleChain(UIView *board) {
+    static NSString *lastKey = nil;
+    if (!board) return;
+
+    NSMutableArray *parts = [NSMutableArray array];
+    UIResponder *r = board;
+    for (int depth = 0; r && depth < 24; depth++) {
+        NSString *cn = NSStringFromClass([r class]);
+        [parts addObject:cn];
+        dumpPuzzleRuntime(r, [NSString stringWithFormat:@"chain[%d]", depth]);
+
+        NSArray *props = @[@"currentPuzzle", @"puzzle", @"viewModel", @"dataSource",
+                           @"delegate", @"boardOwner", @"owner", @"controller",
+                           @"presenter", @"coordinator"];
+        for (NSString *name in props) {
+            SEL sel = NSSelectorFromString(name);
+            if (![r respondsToSelector:sel]) continue;
+            @try {
+                id value = ((id (*)(id, SEL))objc_msgSend)(r, sel);
+                if (value && value != r) {
+                    NSString *vcn = NSStringFromClass([value class]);
+                    if ([vcn containsString:@"Puzzle"] || [vcn containsString:@"Board"] ||
+                        [vcn containsString:@"Game"] || [vcn containsString:@"Model"]) {
+                        dbg([NSString stringWithFormat:@"%@.%@ -> %@", cn, name, vcn]);
+                        dumpPuzzleRuntime(value, [NSString stringWithFormat:@"%@.%@", cn, name]);
+                    }
+                }
+            } @catch (NSException *e) {}
+        }
+
+        r = [r nextResponder];
+    }
+
+    NSString *key = [parts componentsJoinedByString:@"→"];
+    if (![key isEqualToString:lastKey]) {
+        lastKey = key;
+        dbg([NSString stringWithFormat:@"PUZZLE CHAIN: %@", key]);
+    }
+}
+
 static BOOL drivePuzzle(UIView *board);
 
 static void enginePollTick(void) {
@@ -3245,64 +3345,20 @@ static NSString *buildPuzzleFENFromLabels(UIView *board) {
     return (bN && wN && bAvg > wAvg) ? fenB : fenW;
 }
 
-static NSString *readPuzzleFEN(id obj) {
-    if (!obj) return nil;
-
-    typedef id (*IdGetter)(id, SEL);
-    IdGetter getObj = (IdGetter)objc_msgSend;
-
-    NSArray *fenSelectors = @[
-        @"puzzleFen", @"boardFen", @"fen", @"currentFEN",
-        @"fenString", @"positionFEN", @"boardPosition", @"currentPosition"
-    ];
-
-    for (NSString *name in fenSelectors) {
-        SEL sel = NSSelectorFromString(name);
-        if (![obj respondsToSelector:sel]) continue;
-        @try {
-            id value = getObj(obj, sel);
-            if ([value isKindOfClass:[NSString class]]) {
-                NSString *fen = (NSString *)value;
-                if (fen.length > 10 && [fen containsString:@"/"]) return fen;
-            }
-        } @catch (NSException *e) {}
-    }
-
-    SEL puzzleSel = NSSelectorFromString(@"currentPuzzle");
-    if ([obj respondsToSelector:puzzleSel]) {
-        @try {
-            id puzzle = getObj(obj, puzzleSel);
-            if (puzzle && puzzle != obj) {
-                for (NSString *name in @[@"puzzleFen", @"boardFen", @"fen"]) {
-                    SEL sel = NSSelectorFromString(name);
-                    if (![puzzle respondsToSelector:sel]) continue;
-                    @try {
-                        id value = getObj(puzzle, sel);
-                        if ([value isKindOfClass:[NSString class]]) {
-                            NSString *fen = (NSString *)value;
-                            if (fen.length > 10 && [fen containsString:@"/"]) return fen;
-                        }
-                    } @catch (NSException *e) {}
-                }
-            }
-        } @catch (NSException *e) {}
-    }
-
-    return nil;
-}
-
 static BOOL drivePuzzle(UIView *board) {
     if (!board) return NO;
 
-    NSString *pf = readPuzzleFEN(board);
-
-    if (!pf.length) {
-        UIResponder *r = board;
-        for (int depth = 0; depth < 24 && r; depth++) {
-            pf = readPuzzleFEN(r);
-            if (pf.length) break;
-            r = [r nextResponder];
-        }
+    NSString *pf = nil;
+    SEL fenSel = NSSelectorFromString(@"fen");
+    if ([board respondsToSelector:fenSel]) {
+        @try {
+            typedef NSString *(*StrGetter)(id, SEL);
+            NSString *v2fen = ((StrGetter)objc_msgSend)(board, fenSel);
+            if ([v2fen isKindOfClass:[NSString class]] &&
+                v2fen.length > 10 && [v2fen containsString:@"/"]) {
+                pf = v2fen;
+            }
+        } @catch (NSException *e) {}
     }
 
     if (!pf.length) pf = buildPuzzleFENFromLabels(board);
@@ -3660,6 +3716,14 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
                         }
                     }
                 } @catch (NSException *e) {}
+            }
+        }
+
+        if ([chainLog containsString:@"Puzzle"]) {
+            static NSString *gLastPuzzleDumpChain = nil;
+            if (![chainLog isEqualToString:gLastPuzzleDumpChain]) {
+                gLastPuzzleDumpChain = [chainLog copy];
+                dumpPuzzleChain((UIView *)self);
             }
         }
 
