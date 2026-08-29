@@ -2738,6 +2738,56 @@ static void dumpPuzzleRuntime(id obj, NSString *tag) {
         dbg([NSString stringWithFormat:@"PUZZLE IVAR %@: %@", cn,
              [ivarNames componentsJoinedByString:@", "]]);
     }
+
+    ivars = class_copyIvarList(cls, &ivarCount);
+    NSMutableSet *interestingIvars = [NSMutableSet set];
+    for (unsigned int i = 0; i < ivarCount; i++) {
+        const char *n = ivar_getName(ivars[i]);
+        if (!n) continue;
+        NSString *name = [NSString stringWithUTF8String:n];
+        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
+            [name containsString:@"puzzle"] || [name containsString:@"Puzzle"] ||
+            [name containsString:@"position"] || [name containsString:@"Position"] ||
+            [name containsString:@"board"] || [name containsString:@"Board"] ||
+            [name containsString:@"game"] || [name containsString:@"Game"] ||
+            [name containsString:@"current"] || [name containsString:@"Current"]) {
+            [interestingIvars addObject:name];
+        }
+    }
+
+    for (unsigned int i = 0; i < ivarCount; i++) {
+        Ivar iv = ivars[i];
+        const char *n = ivar_getName(iv);
+        if (!n) continue;
+        NSString *name = [NSString stringWithUTF8String:n];
+        if (![interestingIvars containsObject:name]) continue;
+
+        @try {
+            id value = object_getIvar(obj, iv);
+            if (!value) continue;
+
+            NSString *vcn = NSStringFromClass([value class]);
+            if ([value isKindOfClass:[NSString class]]) {
+                NSString *s = (NSString *)value;
+                if (s.length > 0) {
+                    dbg([NSString stringWithFormat:@"PUZZLE IVAR VALUE %@.%@ = %@",
+                         cn, name, s]);
+                }
+            } else {
+                dbg([NSString stringWithFormat:@"PUZZLE IVAR OBJECT %@.%@ -> %@",
+                     cn, name, vcn]);
+                if (value != obj && ([vcn containsString:@"Puzzle"] ||
+                    [vcn containsString:@"Board"] || [vcn containsString:@"Game"] ||
+                    [vcn containsString:@"Model"])) {
+                    dumpPuzzleRuntime(value, [NSString stringWithFormat:@"%@.%@", cn, name]);
+                }
+            }
+        } @catch (NSException *e) {
+            dbg([NSString stringWithFormat:@"PUZZLE IVAR READ FAIL %@.%@", cn, name]);
+        }
+    }
+
+    free(ivars);
 }
 
 static void dumpPuzzleChain(UIView *board) {
@@ -2768,6 +2818,17 @@ static void dumpPuzzleChain(UIView *board) {
                     }
                 }
             } @catch (NSException *e) {}
+
+            if ([name isEqualToString:@"puzzle"]) {
+                @try {
+                    id puzzle = [r valueForKey:@"puzzle"];
+                    if (puzzle && puzzle != r) {
+                        dbg([NSString stringWithFormat:@"%@.puzzle KVC -> %@",
+                             cn, NSStringFromClass([puzzle class])]);
+                        dumpPuzzleRuntime(puzzle, [NSString stringWithFormat:@"%@.puzzle(KVC)", cn]);
+                    }
+                } @catch (NSException *e) {}
+            }
         }
 
         r = [r nextResponder];
