@@ -3245,20 +3245,64 @@ static NSString *buildPuzzleFENFromLabels(UIView *board) {
     return (bN && wN && bAvg > wAvg) ? fenB : fenW;
 }
 
+static NSString *readPuzzleFEN(id obj) {
+    if (!obj) return nil;
+
+    typedef id (*IdGetter)(id, SEL);
+    IdGetter getObj = (IdGetter)objc_msgSend;
+
+    NSArray *fenSelectors = @[
+        @"puzzleFen", @"boardFen", @"fen", @"currentFEN",
+        @"fenString", @"positionFEN", @"boardPosition", @"currentPosition"
+    ];
+
+    for (NSString *name in fenSelectors) {
+        SEL sel = NSSelectorFromString(name);
+        if (![obj respondsToSelector:sel]) continue;
+        @try {
+            id value = getObj(obj, sel);
+            if ([value isKindOfClass:[NSString class]]) {
+                NSString *fen = (NSString *)value;
+                if (fen.length > 10 && [fen containsString:@"/"]) return fen;
+            }
+        } @catch (NSException *e) {}
+    }
+
+    SEL puzzleSel = NSSelectorFromString(@"currentPuzzle");
+    if ([obj respondsToSelector:puzzleSel]) {
+        @try {
+            id puzzle = getObj(obj, puzzleSel);
+            if (puzzle && puzzle != obj) {
+                for (NSString *name in @[@"puzzleFen", @"boardFen", @"fen"]) {
+                    SEL sel = NSSelectorFromString(name);
+                    if (![puzzle respondsToSelector:sel]) continue;
+                    @try {
+                        id value = getObj(puzzle, sel);
+                        if ([value isKindOfClass:[NSString class]]) {
+                            NSString *fen = (NSString *)value;
+                            if (fen.length > 10 && [fen containsString:@"/"]) return fen;
+                        }
+                    } @catch (NSException *e) {}
+                }
+            }
+        } @catch (NSException *e) {}
+    }
+
+    return nil;
+}
+
 static BOOL drivePuzzle(UIView *board) {
     if (!board) return NO;
 
-    NSString *pf = nil;
-    SEL fenSel = NSSelectorFromString(@"fen");
-    if ([board respondsToSelector:fenSel]) {
-        @try {
-            typedef NSString *(*StrGetter)(id, SEL);
-            NSString *v2fen = ((StrGetter)objc_msgSend)(board, fenSel);
-            if ([v2fen isKindOfClass:[NSString class]] &&
-                v2fen.length > 10 && [v2fen containsString:@"/"]) {
-                pf = v2fen;
-            }
-        } @catch (NSException *e) {}
+    NSString *pf = readPuzzleFEN(board);
+
+    if (!pf.length) {
+        UIResponder *r = board;
+        for (int depth = 0; depth < 24 && r; depth++) {
+            pf = readPuzzleFEN(r);
+            if (pf.length) break;
+            r = [r nextResponder];
+        }
     }
 
     if (!pf.length) pf = buildPuzzleFENFromLabels(board);
