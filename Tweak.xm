@@ -2680,167 +2680,6 @@ static id findOnlineGame(UIView *board) {
     return nil;
 }
 
-
-static void dumpPuzzleRuntime(id obj, NSString *tag) {
-    if (!obj) return;
-
-    Class cls = object_getClass(obj);
-    NSString *cn = NSStringFromClass(cls);
-    if (![cn containsString:@"Puzzle"] &&
-        ![cn containsString:@"CHBoardView"]) return;
-
-    dbg([NSString stringWithFormat:@"PUZZLE OBJ %@ = %@", tag, cn]);
-
-    unsigned int methodCount = 0;
-    Method *methods = class_copyMethodList(cls, &methodCount);
-    NSMutableArray *methodNames = [NSMutableArray array];
-    for (unsigned int i = 0; i < methodCount; i++) {
-        SEL sel = method_getName(methods[i]);
-        NSString *name = NSStringFromSelector(sel);
-        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
-            [name containsString:@"FEN"] || [name containsString:@"puzzle"] ||
-            [name containsString:@"Puzzle"] || [name containsString:@"position"] ||
-            [name containsString:@"Position"] || [name containsString:@"board"] ||
-            [name containsString:@"Board"] || [name containsString:@"game"] ||
-            [name containsString:@"Game"] || [name containsString:@"current"] ||
-            [name containsString:@"Current"]) {
-            [methodNames addObject:name];
-        }
-    }
-    free(methods);
-
-    [methodNames sortUsingSelector:@selector(compare:)];
-    if (methodNames.count) {
-        dbg([NSString stringWithFormat:@"PUZZLE SEL %@: %@", cn,
-             [methodNames componentsJoinedByString:@", "]]);
-    }
-
-    unsigned int ivarCount = 0;
-    Ivar *ivars = class_copyIvarList(cls, &ivarCount);
-    NSMutableArray *ivarNames = [NSMutableArray array];
-    for (unsigned int i = 0; i < ivarCount; i++) {
-        const char *n = ivar_getName(ivars[i]);
-        if (!n) continue;
-        NSString *name = [NSString stringWithUTF8String:n];
-        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
-            [name containsString:@"puzzle"] || [name containsString:@"Puzzle"] ||
-            [name containsString:@"position"] || [name containsString:@"Position"] ||
-            [name containsString:@"board"] || [name containsString:@"Board"] ||
-            [name containsString:@"game"] || [name containsString:@"Game"] ||
-            [name containsString:@"current"] || [name containsString:@"Current"]) {
-            [ivarNames addObject:name];
-        }
-    }
-    free(ivars);
-
-    if (ivarNames.count) {
-        [ivarNames sortUsingSelector:@selector(compare:)];
-        dbg([NSString stringWithFormat:@"PUZZLE IVAR %@: %@", cn,
-             [ivarNames componentsJoinedByString:@", "]]);
-    }
-
-    ivars = class_copyIvarList(cls, &ivarCount);
-    NSMutableSet *interestingIvars = [NSMutableSet set];
-    for (unsigned int i = 0; i < ivarCount; i++) {
-        const char *n = ivar_getName(ivars[i]);
-        if (!n) continue;
-        NSString *name = [NSString stringWithUTF8String:n];
-        if ([name containsString:@"fen"] || [name containsString:@"Fen"] ||
-            [name containsString:@"puzzle"] || [name containsString:@"Puzzle"] ||
-            [name containsString:@"position"] || [name containsString:@"Position"] ||
-            [name containsString:@"board"] || [name containsString:@"Board"] ||
-            [name containsString:@"game"] || [name containsString:@"Game"] ||
-            [name containsString:@"current"] || [name containsString:@"Current"]) {
-            [interestingIvars addObject:name];
-        }
-    }
-
-    for (unsigned int i = 0; i < ivarCount; i++) {
-        Ivar iv = ivars[i];
-        const char *n = ivar_getName(iv);
-        if (!n) continue;
-        NSString *name = [NSString stringWithUTF8String:n];
-        if (![interestingIvars containsObject:name]) continue;
-
-        @try {
-            id value = object_getIvar(obj, iv);
-            if (!value) continue;
-
-            NSString *vcn = NSStringFromClass([value class]);
-            if ([value isKindOfClass:[NSString class]]) {
-                NSString *s = (NSString *)value;
-                if (s.length > 0) {
-                    dbg([NSString stringWithFormat:@"PUZZLE IVAR VALUE %@.%@ = %@",
-                         cn, name, s]);
-                }
-            } else {
-                dbg([NSString stringWithFormat:@"PUZZLE IVAR OBJECT %@.%@ -> %@",
-                     cn, name, vcn]);
-                if (value != obj && ([vcn containsString:@"Puzzle"] ||
-                    [vcn containsString:@"Board"] || [vcn containsString:@"Game"] ||
-                    [vcn containsString:@"Model"])) {
-                    dumpPuzzleRuntime(value, [NSString stringWithFormat:@"%@.%@", cn, name]);
-                }
-            }
-        } @catch (NSException *e) {
-            dbg([NSString stringWithFormat:@"PUZZLE IVAR READ FAIL %@.%@", cn, name]);
-        }
-    }
-
-    free(ivars);
-}
-
-static void dumpPuzzleChain(UIView *board) {
-    static NSString *lastKey = nil;
-    if (!board) return;
-
-    NSMutableArray *parts = [NSMutableArray array];
-    UIResponder *r = board;
-    for (int depth = 0; r && depth < 24; depth++) {
-        NSString *cn = NSStringFromClass([r class]);
-        [parts addObject:cn];
-        dumpPuzzleRuntime(r, [NSString stringWithFormat:@"chain[%d]", depth]);
-
-        NSArray *props = @[@"currentPuzzle", @"puzzle", @"viewModel", @"dataSource",
-                           @"delegate", @"boardOwner", @"owner", @"controller",
-                           @"presenter", @"coordinator"];
-        for (NSString *name in props) {
-            SEL sel = NSSelectorFromString(name);
-            if (![r respondsToSelector:sel]) continue;
-            @try {
-                id value = ((id (*)(id, SEL))objc_msgSend)(r, sel);
-                if (value && value != r) {
-                    NSString *vcn = NSStringFromClass([value class]);
-                    if ([vcn containsString:@"Puzzle"] || [vcn containsString:@"Board"] ||
-                        [vcn containsString:@"Game"] || [vcn containsString:@"Model"]) {
-                        dbg([NSString stringWithFormat:@"%@.%@ -> %@", cn, name, vcn]);
-                        dumpPuzzleRuntime(value, [NSString stringWithFormat:@"%@.%@", cn, name]);
-                    }
-                }
-            } @catch (NSException *e) {}
-
-            if ([name isEqualToString:@"puzzle"]) {
-                @try {
-                    id puzzle = [r valueForKey:@"puzzle"];
-                    if (puzzle && puzzle != r) {
-                        dbg([NSString stringWithFormat:@"%@.puzzle KVC -> %@",
-                             cn, NSStringFromClass([puzzle class])]);
-                        dumpPuzzleRuntime(puzzle, [NSString stringWithFormat:@"%@.puzzle(KVC)", cn]);
-                    }
-                } @catch (NSException *e) {}
-            }
-        }
-
-        r = [r nextResponder];
-    }
-
-    NSString *key = [parts componentsJoinedByString:@"→"];
-    if (![key isEqualToString:lastKey]) {
-        lastKey = key;
-        dbg([NSString stringWithFormat:@"PUZZLE CHAIN: %@", key]);
-    }
-}
-
 static BOOL drivePuzzle(UIView *board);
 
 static void enginePollTick(void) {
@@ -3559,35 +3398,39 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
                                   @"gameModel", @"chessGameModel", @"chessBoardModel", @"boardModel",
                                   @"viewModel", @"botGame", @"playGame", @"activeGame",
                                   @"coachGame", @"lessonGame", @"practiceGame", @"puzzleGame"];
-        UIResponder *resp = [(UIView *)self nextResponder];
         id game = nil;
-        int chainDepth = 0;
         static NSString *gLoggedChainVC = nil;
         NSMutableString *chainLog = [NSMutableString string];
 
+        NSMutableArray *gameTargetList = [NSMutableArray arrayWithObject:self];
+        UIResponder *resp = [(UIView *)self nextResponder];
+        int chainDepth = 0;
         while (resp && chainDepth < 20) {
+            [gameTargetList addObject:resp];
             [chainLog appendFormat:@"%@→", NSStringFromClass([resp class])];
-            for (NSString *selName in gameSelNames) {
-                SEL sel = NSSelectorFromString(selName);
-                if ([resp respondsToSelector:sel]) {
-                    @try {
-                        id obj = getObj(resp, sel);
-                        if (obj) {
-                            game = obj;
-                            NSString *vcName = NSStringFromClass([resp class]);
-                            if (![vcName isEqualToString:gLoggedChainVC]) {
-                                gLoggedChainVC = vcName;
-                                dbg([NSString stringWithFormat:@"game via .%@ on %@ (class: %@)",
-                                     selName, vcName, NSStringFromClass([obj class])]);
-                            }
-                            break;
-                        }
-                    } @catch (NSException *e) {}
-                }
-            }
-            if (game) break;
             resp = [resp nextResponder];
             chainDepth++;
+        }
+
+        for (id target in gameTargetList) {
+            for (NSString *selName in gameSelNames) {
+                SEL sel = NSSelectorFromString(selName);
+                if (![target respondsToSelector:sel]) continue;
+                @try {
+                    id obj = getObj(target, sel);
+                    if (obj) {
+                        game = obj;
+                        NSString *ownerName = NSStringFromClass([target class]);
+                        if (![ownerName isEqualToString:gLoggedChainVC]) {
+                            gLoggedChainVC = ownerName;
+                            dbg([NSString stringWithFormat:@"game via .%@ on %@ (class: %@)",
+                                 selName, ownerName, NSStringFromClass([obj class])]);
+                        }
+                        break;
+                    }
+                } @catch (NSException *e) {}
+            }
+            if (game) break;
         }
 
         NSString *currentFEN = nil;
@@ -3777,14 +3620,6 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
                         }
                     }
                 } @catch (NSException *e) {}
-            }
-        }
-
-        if ([chainLog containsString:@"Puzzle"]) {
-            static NSString *gLastPuzzleDumpChain = nil;
-            if (![chainLog isEqualToString:gLastPuzzleDumpChain]) {
-                gLastPuzzleDumpChain = [chainLog copy];
-                dumpPuzzleChain((UIView *)self);
             }
         }
 
