@@ -3246,21 +3246,39 @@ static NSString *buildPuzzleFENFromLabels(UIView *board) {
 }
 
 static BOOL drivePuzzle(UIView *board) {
-    NSString *pf = buildPuzzleFENFromLabels(board);
+    if (!board) return NO;
+
+    NSString *pf = nil;
+    SEL fenSel = NSSelectorFromString(@"fen");
+    if ([board respondsToSelector:fenSel]) {
+        @try {
+            typedef NSString *(*StrGetter)(id, SEL);
+            NSString *v2fen = ((StrGetter)objc_msgSend)(board, fenSel);
+            if ([v2fen isKindOfClass:[NSString class]] &&
+                v2fen.length > 10 && [v2fen containsString:@"/"]) {
+                pf = v2fen;
+            }
+        } @catch (NSException *e) {}
+    }
+
+    if (!pf.length) pf = buildPuzzleFENFromLabels(board);
     if (!pf.length) return NO;
+
     parseFEN(pf);
     setMyColor(gSide, @"drivePuzzle");
     static NSString *sLastPuzzleFen = nil;
-    if (![pf isEqualToString:sLastPuzzleFen]) {
+    BOOL changed = ![pf isEqualToString:sLastPuzzleFen];
+    if (changed) {
         sLastPuzzleFen = [pf copy];
         dbg([NSString stringWithFormat:@"PUZZLE FEN: %@", pf]);
+        gLastEngineFEN = nil;
+        gLastEncoded = nil;
     }
     gForcedFlip = -1;
     gDrawBoard = board;
     fetchMove(pf);
     return YES;
 }
-
 static void hook_layoutSubviews(id self, SEL _cmd) {
 
     Class c = [self class];
@@ -3284,6 +3302,20 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
 
     gBoardView = boardSelf;
 
+    if ([NSStringFromClass([boardSelf class]) containsString:@"RNChessboardWrapperView"]) {
+        UIResponder *vr = [(UIView *)boardSelf nextResponder];
+        int vd = 0;
+        while (vr && vd < 24) {
+            NSString *vcn = NSStringFromClass([vr class]);
+            if ([vcn containsString:@"Puzzle"] || [vcn containsString:@"Tactics"]) {
+                gPuzzleBoard = boardSelf;
+                break;
+            }
+            vr = [vr nextResponder];
+            vd++;
+        }
+    }
+
     reassertArrow(gDrawBoard);
     updateEvalBar();
 
@@ -3303,6 +3335,23 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
 
         static NSInteger gLastRawColor = -99;
         SEL colorSel = NSSelectorFromString(@"myPieceColor");
+        SEL playingAsSel = NSSelectorFromString(@"playingAs");
+        BOOL gotPlayingAs = NO;
+        if ([self respondsToSelector:playingAsSel]) {
+            @try {
+                id playingAs = getObj(self, playingAsSel);
+                if ([playingAs isKindOfClass:[NSString class]]) {
+                    NSString *pa = [(NSString *)playingAs lowercaseString];
+                    if ([pa containsString:@"white"] || [pa isEqualToString:@"w"]) {
+                        setMyColor(0, [NSString stringWithFormat:@"playingAs=%@ %@", playingAs, NSStringFromClass([self class])]);
+                        gotPlayingAs = YES;
+                    } else if ([pa containsString:@"black"] || [pa isEqualToString:@"b"]) {
+                        setMyColor(1, [NSString stringWithFormat:@"playingAs=%@ %@", playingAs, NSStringFromClass([self class])]);
+                        gotPlayingAs = YES;
+                    }
+                }
+            } @catch (NSException *e) {}
+        }
         if ([self respondsToSelector:colorSel]) {
 
             gOnlineDrawBoard = boardSelf;
@@ -3323,7 +3372,7 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
                     setMyColor(flipped ? 1 : 0, [NSString stringWithFormat:@"raw=0 isFlipped=%d %@", flipped, NSStringFromClass([self class])]);
                 }
             }
-        } else {
+        } else if (!gotPlayingAs) {
 
             SEL flipSel2 = NSSelectorFromString(@"isFlipped");
             if ([self respondsToSelector:flipSel2]) {
@@ -3345,9 +3394,9 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
         }
 
         NSArray *gameSelNames = @[@"game", @"chessGame", @"puzzle", @"currentGame",
-                                  @"gameModel", @"chessBoardModel", @"boardModel",
+                                  @"gameModel", @"chessGameModel", @"chessBoardModel", @"boardModel",
                                   @"viewModel", @"botGame", @"playGame", @"activeGame",
-                                  @"coachGame", @"lessonGame", @"practiceGame"];
+                                  @"coachGame", @"lessonGame", @"practiceGame", @"puzzleGame"];
         UIResponder *resp = [(UIView *)self nextResponder];
         id game = nil;
         int chainDepth = 0;
@@ -3551,6 +3600,24 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
             }
         }
 
+        if (!currentFEN && [NSStringFromClass([self class]) containsString:@"RNChessboardWrapperView"]) {
+            SEL v2FenSel = NSSelectorFromString(@"fen");
+            if ([self respondsToSelector:v2FenSel]) {
+                @try {
+                    NSString *v2fen = strGet(self, v2FenSel);
+                    if (v2fen.length > 10 && [v2fen containsString:@"/"]) {
+                        parseFEN(v2fen);
+                        currentFEN = v2fen;
+                        static NSString *gLastV2FenRead = nil;
+                        if (![v2fen isEqualToString:gLastV2FenRead]) {
+                            gLastV2FenRead = [v2fen copy];
+                            dbg([NSString stringWithFormat:@"FEN via Puzzle V2 .fen on %@", NSStringFromClass([self class])]);
+                        }
+                    }
+                } @catch (NSException *e) {}
+            }
+        }
+
         if (!game && !currentFEN) {
             static NSString *gLastFailChain = nil;
             static NSDate *gLastFailLog = nil;
@@ -3652,7 +3719,9 @@ static void installBoardHooks(void) {
         @"CHSoloBoardView",
         @"CHSimpleBoardView",
         @"CHDiagramBoardView",
-        @"CHAnalysisBoardView"
+        @"CHAnalysisBoardView",
+        @"ReactNativeHost.RNChessboardWrapperView",
+        @"RNChessboardWrapperView"
     ];
     SEL layoutSel = @selector(layoutSubviews);
     for (NSString *name in boardClassNames) {
@@ -3668,6 +3737,25 @@ static void installBoardHooks(void) {
             gOrigLayouts[name] = [NSValue valueWithBytes:&orig objCType:@encode(OrigLayout)];
         }
         dbg([NSString stringWithFormat:@"HOOKED layoutSubviews on %@", name]);
+    }
+
+    static BOOL sRNChessboardHooked = NO;
+    {
+        unsigned int rnCount = 0;
+        Class *rnClasses = objc_copyClassList(&rnCount);
+        for (unsigned int i = 0; i < rnCount; i++) {
+            NSString *rnName = NSStringFromClass(rnClasses[i]);
+            if (![rnName containsString:@"RNChessboardWrapperView"]) continue;
+            Method lm = class_getInstanceMethod(rnClasses[i], layoutSel);
+            if (lm && !gOrigLayouts[rnName]) {
+                OrigLayout orig = NULL;
+                MSHookMessageEx(rnClasses[i], layoutSel, (IMP)hook_layoutSubviews, (IMP *)&orig);
+                if (orig) gOrigLayouts[rnName] = [NSValue valueWithBytes:&orig objCType:@encode(OrigLayout)];
+                dbg([NSString stringWithFormat:@"HOOKED layoutSubviews on %@ (Puzzle V2)", rnName]);
+            }
+            sRNChessboardHooked = YES;
+        }
+        free(rnClasses);
     }
 
     static BOOL sSwiftBoardHooked = NO;
