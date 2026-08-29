@@ -3398,60 +3398,72 @@ static void hook_layoutSubviews(id self, SEL _cmd) {
                                   @"gameModel", @"chessGameModel", @"chessBoardModel", @"boardModel",
                                   @"viewModel", @"botGame", @"playGame", @"activeGame",
                                   @"coachGame", @"lessonGame", @"practiceGame", @"puzzleGame"];
+        UIResponder *resp = [(UIView *)self nextResponder];
         id game = nil;
+        int chainDepth = 0;
         static NSString *gLoggedChainVC = nil;
         NSMutableString *chainLog = [NSMutableString string];
 
-        NSMutableArray *gameTargetList = [NSMutableArray arrayWithObject:self];
-        UIResponder *resp = [(UIView *)self nextResponder];
-        int chainDepth = 0;
         while (resp && chainDepth < 20) {
-            [gameTargetList addObject:resp];
             [chainLog appendFormat:@"%@→", NSStringFromClass([resp class])];
-            resp = [resp nextResponder];
-            chainDepth++;
-        }
-
-        for (id target in gameTargetList) {
             for (NSString *selName in gameSelNames) {
                 SEL sel = NSSelectorFromString(selName);
-                if (![target respondsToSelector:sel]) continue;
-                @try {
-                    id obj = getObj(target, sel);
-                    if (obj) {
-                        game = obj;
-                        NSString *ownerName = NSStringFromClass([target class]);
-                        if (![ownerName isEqualToString:gLoggedChainVC]) {
-                            gLoggedChainVC = ownerName;
-                            dbg([NSString stringWithFormat:@"game via .%@ on %@ (class: %@)",
-                                 selName, ownerName, NSStringFromClass([obj class])]);
+                if ([resp respondsToSelector:sel]) {
+                    @try {
+                        id obj = getObj(resp, sel);
+                        if (obj) {
+                            game = obj;
+                            NSString *vcName = NSStringFromClass([resp class]);
+                            if (![vcName isEqualToString:gLoggedChainVC]) {
+                                gLoggedChainVC = vcName;
+                                dbg([NSString stringWithFormat:@"game via .%@ on %@ (class: %@)",
+                                     selName, vcName, NSStringFromClass([obj class])]);
+                            }
+                            break;
                         }
-                        break;
-                    }
-                } @catch (NSException *e) {}
+                    } @catch (NSException *e) {}
+                }
             }
             if (game) break;
+            resp = [resp nextResponder];
+            chainDepth++;
         }
 
         NSString *currentFEN = nil;
 
         if (game) {
-            SEL encSel = NSSelectorFromString(@"encodedMoves");
-            if ([game respondsToSelector:encSel]) {
-                gOnlineGame = game;
-                dumpMoveSelectors(game, @"game");
-                gOnlineSeen = [NSDate date];
-                gBotBoard = nil;
-                NSString *encoded = strGet(game, encSel);
-                NSString *encKey = encoded.length ? encoded : @"__EMPTY__";
-                if ([encKey isEqualToString:gLastEncoded]) return;
-                gLastEncoded = [encKey copy];
+            SEL curFenSel = NSSelectorFromString(@"currentFen");
+            if ([game respondsToSelector:curFenSel]) {
+                @try {
+                    NSString *fen = strGet(game, curFenSel);
+                    if (fen.length > 10 && [fen containsString:@"/"]) {
+                        currentFEN = fen;
+                        gOnlineGame = game;
+                        gOnlineSeen = [NSDate date];
+                        gBotBoard = nil;
+                        dbg([NSString stringWithFormat:@"FEN via .currentFen on %@", NSStringFromClass([game class])]);
+                    }
+                } @catch (NSException *e) {}
+            }
 
-                SEL iFenSel = NSSelectorFromString(@"initialFEN");
-                NSString *initialFEN = nil;
-                if ([game respondsToSelector:iFenSel]) initialFEN = strGet(game, iFenSel);
-                if (!initialFEN.length) initialFEN = @"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-                currentFEN = decodeTCNToFEN(initialFEN, encoded);
+            if (!currentFEN) {
+                SEL encSel = NSSelectorFromString(@"encodedMoves");
+                if ([game respondsToSelector:encSel]) {
+                    gOnlineGame = game;
+                    dumpMoveSelectors(game, @"game");
+                    gOnlineSeen = [NSDate date];
+                    gBotBoard = nil;
+                    NSString *encoded = strGet(game, encSel);
+                    NSString *encKey = encoded.length ? encoded : @"__EMPTY__";
+                    if ([encKey isEqualToString:gLastEncoded]) return;
+                    gLastEncoded = [encKey copy];
+
+                    SEL iFenSel = NSSelectorFromString(@"initialFEN");
+                    NSString *initialFEN = nil;
+                    if ([game respondsToSelector:iFenSel]) initialFEN = strGet(game, iFenSel);
+                    if (!initialFEN.length) initialFEN = @"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+                    currentFEN = decodeTCNToFEN(initialFEN, encoded);
+                }
             }
         }
 
