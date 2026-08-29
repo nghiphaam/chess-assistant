@@ -3279,6 +3279,7 @@ static BOOL drivePuzzle(UIView *board) {
     fetchMove(pf);
     return YES;
 }
+
 static void hook_layoutSubviews(id self, SEL _cmd) {
 
     Class c = [self class];
@@ -3739,7 +3740,6 @@ static void installBoardHooks(void) {
         dbg([NSString stringWithFormat:@"HOOKED layoutSubviews on %@", name]);
     }
 
-    static BOOL sRNChessboardHooked = NO;
     {
         unsigned int rnCount = 0;
         Class *rnClasses = objc_copyClassList(&rnCount);
@@ -3753,7 +3753,6 @@ static void installBoardHooks(void) {
                 if (orig) gOrigLayouts[rnName] = [NSValue valueWithBytes:&orig objCType:@encode(OrigLayout)];
                 dbg([NSString stringWithFormat:@"HOOKED layoutSubviews on %@ (Puzzle V2)", rnName]);
             }
-            sRNChessboardHooked = YES;
         }
         free(rnClasses);
     }
