@@ -3261,6 +3261,48 @@ static BOOL drivePuzzle(UIView *board) {
         } @catch (NSException *e) {}
     }
 
+    SEL chessGameSel = NSSelectorFromString(@"chessGame");
+    id chessGame = nil;
+    if (!pf.length && [board respondsToSelector:chessGameSel]) {
+        @try {
+            chessGame = ((id (*)(id, SEL))objc_msgSend)(board, chessGameSel);
+        } @catch (NSException *e) {}
+    }
+
+    if (!pf.length && chessGame) {
+        SEL currentFenSel = NSSelectorFromString(@"currentFen");
+        if ([chessGame respondsToSelector:currentFenSel]) {
+            @try {
+                NSString *fen = ((NSString *(*)(id, SEL))objc_msgSend)(chessGame, currentFenSel);
+                if (fen.length > 10 && [fen containsString:@"/"]) {
+                    pf = fen;
+                    gOnlineGame = chessGame;
+                    gOnlineSeen = [NSDate date];
+                }
+            } @catch (NSException *e) {}
+        }
+    }
+
+    if (!pf.length && chessGame) {
+        SEL encSel = NSSelectorFromString(@"encodedMoves");
+        if ([chessGame respondsToSelector:encSel]) {
+            @try {
+                NSString *encoded = ((NSString *(*)(id, SEL))objc_msgSend)(chessGame, encSel);
+                SEL iFenSel = NSSelectorFromString(@"initialFEN");
+                NSString *initialFEN = [chessGame respondsToSelector:iFenSel]
+                    ? ((NSString *(*)(id, SEL))objc_msgSend)(chessGame, iFenSel) : nil;
+                if (!initialFEN.length) {
+                    initialFEN = @"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+                }
+                if (encoded) pf = decodeTCNToFEN(initialFEN, encoded);
+                if (pf.length) {
+                    gOnlineGame = chessGame;
+                    gOnlineSeen = [NSDate date];
+                }
+            } @catch (NSException *e) {}
+        }
+    }
+
     if (!pf.length) pf = buildPuzzleFENFromLabels(board);
     if (!pf.length) return NO;
 
